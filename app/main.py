@@ -14,7 +14,7 @@ from app.db.database import engine, Base, SessionLocal
 
 # Import semua models agar terdaftar ke metadata Base sebelum create_all
 from app.models.user import User        # noqa: F401
-from app.models.dies_task import DiesTask  # noqa: F401
+from app.models.dies_task import DiesTask, Line, Machine, Die  # noqa: F401
 
 # Routers
 from app.routers.auth import router as auth_router
@@ -29,6 +29,7 @@ from app.internal.admin import seed_admin
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────
+
     Base.metadata.create_all(bind=engine)
     print(f"[OK] Database ready: {settings.DATABASE_URL}")
     db = SessionLocal()

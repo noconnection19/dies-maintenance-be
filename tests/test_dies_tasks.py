@@ -30,7 +30,7 @@ def test_create_and_list_line_stop():
 
     create_res = client.post(
         "/api/v1/line-stop/",
-        json={"noreg": "LS-001", "part_no": "P-100", "description": "Test task"},
+        json={"noreg": "LS-001", "part_no": "47781.2-0K090", "description": "Test task"},
         headers=headers,
     )
     assert create_res.status_code == 201
