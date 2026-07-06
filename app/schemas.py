@@ -3,6 +3,28 @@ from datetime import datetime
 from typing import Optional
 from enum import Enum
 
+
+# ─── Auth Schemas ──────────────────────────────────────────────────
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserInfo(BaseModel):
+    id: int
+    username: str
+    full_name: Optional[str] = None
+    role: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserInfo
+
+
 class TaskStatus(str, Enum):
     OPEN = "OPEN"
     IN_PROGRESS = "IN_PROGRESS"
