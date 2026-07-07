@@ -334,25 +334,61 @@ def get_monitoring_dashboard(
 
 
     # ── 8. Trend Occurrence per Line ────────────────────────────────────
-    trend_list = []
-    monthly_line_occurrences = collections.defaultdict(lambda: collections.defaultdict(int))
-    for r in rows:
-        dt = r.REPAIRED_DT
-        m_key = (dt.year, dt.month)
-        monthly_line_occurrences[m_key][r.LINE_CD] += 1
+    trend_query = text(f"""
+        SELECT 
+            ms.LINE_NAME AS LINE, 
+            DATE_FORMAT(l.REPAIRED_DT, '%Y-%m') AS Bulan_Tahun,
+            COUNT(*) AS Occ 
+        FROM railway.MSTR_LINE ms 
+        INNER JOIN railway.DET_DIES_LINE_STOP l ON l.LINE_CD = ms.LINE_CD 
+        WHERE {filter_str}
+        GROUP BY ms.LINE_NAME, DATE_FORMAT(l.REPAIRED_DT, '%Y-%m')
+        ORDER BY ms.LINE_NAME ASC, Bulan_Tahun ASC
+    """)
+    trend_rows = db.execute(trend_query, params).fetchall()
+    
+    month_data_map = collections.defaultdict(lambda: {
+        "blanking": 0, "tandem": 0, "transver1": 0, "transver2": 0, "transver3": 0
+    })
+    
+    for row in trend_rows:
+        line_name = row._mapping.get("LINE")
+        month_str = row._mapping.get("Bulan_Tahun")
+        occ = row._mapping.get("Occ") or 0
+        
+        try:
+            dt_m = datetime.strptime(month_str, "%Y-%m")
+            m_name = format_month_year(dt_m)
+        except Exception:
+            m_name = month_str
+            
+        if line_name == "BLAKING":
+            month_data_map[m_name]["blanking"] = occ
+        elif line_name == "TANDEM":
+            month_data_map[m_name]["tandem"] = occ
+        elif line_name == "TRANSVER 1":
+            month_data_map[m_name]["transver1"] = occ
+        elif line_name == "TRANSVER 2":
+            month_data_map[m_name]["transver2"] = occ
+        elif line_name == "TRANSVER 3":
+            month_data_map[m_name]["transver3"] = occ
 
+    trend_list = []
     for m_key in sorted_months:
         dt_month = datetime(m_key[0], m_key[1], 1)
         m_name = format_month_year(dt_month)
         
-        occ_data = monthly_line_occurrences[m_key]
+        pivoted = month_data_map.get(m_name) or {
+            "blanking": 0, "tandem": 0, "transver1": 0, "transver2": 0, "transver3": 0
+        }
+        
         trend_list.append({
             "month": m_name,
-            "blanking": occ_data["BL"],
-            "tandem": occ_data["TD"],
-            "transver1": occ_data["TR1"],
-            "transver2": occ_data["TR2"],
-            "transver3": occ_data["TR3"]
+            "blanking": pivoted["blanking"],
+            "tandem": pivoted["tandem"],
+            "transver1": pivoted["transver1"],
+            "transver2": pivoted["transver2"],
+            "transver3": pivoted["transver3"]
         })
 
     # ── 9. Improvement PPM per Problem (Lowest & Highest) ───────────────
