@@ -256,24 +256,56 @@ def get_monitoring_dashboard(
         best_month_value = 0.0
 
     # ── 6. Line Details Cards ───────────────────────────────────────────
-    def get_line_metrics(lines_list):
-        total_l_duration_ls = 0.0
-        total_l_pcs_m = 0.0
-        for l_code in lines_list:
-            total_l_duration_ls += line_duration_ls[l_code]
-            total_l_pcs_m += line_pcs_m[l_code]
-        
-        ppm = (total_l_duration_ls / total_l_pcs_m * 1000000.0) if total_l_pcs_m > 0 else 0.0
-        hours = total_l_duration_ls / 60.0
+    line_filters = ["l.REPAIRED_DT >= :start_date", "l.REPAIRED_DT <= :end_date"]
+    line_params = {
+        "start_date": params["start_date"],
+        "end_date": params["end_date"]
+    }
+    if shift:
+        line_filters.append("l.SHIFT = :shift")
+        line_params["shift"] = shift
+    
+    line_filter_str = " AND ".join(line_filters)
+    
+    line_details_query = text(f"""
+        SELECT 
+            l.LINE_CD,
+            SUM(l.DURATION_LS) as total_dur,
+            SUM(l.PCS_M) as total_pcs
+        FROM railway.DET_DIES_LINE_STOP l
+        WHERE l.LINE_CD IN ('TD', 'BL', 'TR1', 'TR2', 'TR3') AND {line_filter_str}
+        GROUP BY l.LINE_CD
+    """)
+    line_details_rows = db.execute(line_details_query, line_params).fetchall()
+    
+    line_sums = {
+        "TD": {"dur": 0.0, "pcs": 0.0},
+        "BL": {"dur": 0.0, "pcs": 0.0},
+        "TR1": {"dur": 0.0, "pcs": 0.0},
+        "TR2": {"dur": 0.0, "pcs": 0.0},
+        "TR3": {"dur": 0.0, "pcs": 0.0},
+    }
+    for row in line_details_rows:
+        l_cd = row.LINE_CD
+        if l_cd in line_sums:
+            line_sums[l_cd]["dur"] = float(row.total_dur or 0)
+            line_sums[l_cd]["pcs"] = float(row.total_pcs or 0)
+
+    def format_metrics(dur, pcs):
+        ppm = (dur / pcs * 1000000.0) if pcs > 0 else 0.0
+        hours = dur / 60.0
         return {
             "ppm": round(ppm, 1),
             "hours": round(hours, 1)
         }
 
     line_details = {
-        "tandem": get_line_metrics(["TD"]),
-        "blanking": get_line_metrics(["BL"]),
-        "transver": get_line_metrics(["TR1", "TR2", "TR3"])
+        "tandem": format_metrics(line_sums["TD"]["dur"], line_sums["TD"]["pcs"]),
+        "blanking": format_metrics(line_sums["BL"]["dur"], line_sums["BL"]["pcs"]),
+        "transver": format_metrics(
+            line_sums["TR1"]["dur"] + line_sums["TR2"]["dur"] + line_sums["TR3"]["dur"],
+            line_sums["TR1"]["pcs"] + line_sums["TR2"]["pcs"] + line_sums["TR3"]["pcs"]
+        )
     }
 
     # ── 7. Breakdown Problem per Categories ──────────────────────────────
