@@ -293,11 +293,12 @@ def get_monitoring_dashboard(
 
     def format_metrics(dur, pcs):
         ppm = (dur / pcs * 1000000.0) if pcs > 0 else 0.0
-        hours = dur / 60.0
+        hours = ppm / 60.0
         return {
             "ppm": round(ppm, 1),
             "hours": round(hours, 1)
         }
+
 
     line_details = {
         "tandem": format_metrics(line_sums["TD"]["dur"], line_sums["TD"]["pcs"]),
