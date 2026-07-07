@@ -310,18 +310,28 @@ def get_monitoring_dashboard(
     }
 
     # ── 7. Breakdown Problem per Categories ──────────────────────────────
-    total_problems = sum(problem_counts.values())
+    breakdown_query = text(f"""
+        SELECT 
+            ms.SYSTEM_VALUE AS Problem, 
+            COUNT(*) AS Occ, 
+            ROUND((COUNT(*) * 100.0 / SUM(COUNT(*)) OVER())) AS PERSENTASE 
+        FROM railway.MSTR_SYSTEM ms 
+        LEFT JOIN railway.DET_DIES_LINE_STOP l ON l.PROBLEM_CD = ms.SYSTEM_CD 
+        WHERE ms.SYSTEM_TYPE = 'PROBLEM' AND {filter_str}
+        GROUP BY ms.SYSTEM_CD, ms.SYSTEM_VALUE
+        ORDER BY Occ DESC
+    """)
+    breakdown_rows = db.execute(breakdown_query, params).fetchall()
+    
     breakdown_list = []
-    for prob, p_count in problem_counts.items():
-        pct = (p_count / total_problems * 100) if total_problems > 0 else 0.0
+    for row in breakdown_rows:
         breakdown_list.append({
-            "problem": prob,
-            "occ": p_count,
-            "percentage": round(pct, 1)
+            "problem": row._mapping.get("Problem") or "Other",
+            "occ": row._mapping.get("Occ") or 0,
+            "percentage": float(row._mapping.get("PERSENTASE") or 0),
+            "presentase": float(row._mapping.get("PERSENTASE") or 0)
         })
-    # Urutkan berdasarkan occurrence descending
-    breakdown_list.sort(key=lambda x: x["occ"], reverse=True)
-    breakdown_list = breakdown_list[:7]  # Ambil top 7 sesuai mockup
+
 
     # ── 8. Trend Occurrence per Line ────────────────────────────────────
     trend_list = []
