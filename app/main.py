@@ -12,9 +12,17 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.db.database import engine, Base, SessionLocal
 
+import os
+os.makedirs("uploads", exist_ok=True)
+
 # Import semua models agar terdaftar ke metadata Base sebelum create_all
 from app.models.user import User        # noqa: F401
-from app.models.dies_task import DiesTask, Line, Machine, Die  # noqa: F401
+from app.models.dies_task import (  # noqa: F401
+    DiesTask, Line, Machine, Die, Attachment, PartOrderHeader, PartOrderDetail, DiesOperation,
+    MstrPlant, MstrPartLocation, MstrSparepart, MstrApprovalH, MstrApprovalD,
+    DetDiesPic, DetApproval, MstrPreventiveFormH, MstrPreventiveFormD,
+    DetDiesPreventiveScheduleH, DetDiesPreventiveScheduleD, DetPreventiveForm, DetDiesRepair
+)
 
 # Routers
 from app.routers.auth import router as auth_router
@@ -22,6 +30,7 @@ from app.routers.dies_line_stop import router as line_stop_router
 from app.routers.dies_repair import router as repair_router
 from app.routers.dies_preventive import router as preventive_router
 from app.routers.dashboard import router as dashboard_router
+from app.routers.attachments import router as attachments_router
 
 from app.internal.admin import seed_admin
 
@@ -30,13 +39,13 @@ from app.internal.admin import seed_admin
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────
 
-    Base.metadata.create_all(bind=engine)
+    # Base.metadata.create_all(bind=engine)
     print(f"[OK] Database ready: {settings.DATABASE_URL}")
-    db = SessionLocal()
-    try:
-        seed_admin(db)
-    finally:
-        db.close()
+    # db = SessionLocal()
+    # try:
+    #     seed_admin(db)
+    # finally:
+    #     db.close()
     yield
     # ── Shutdown ─────────────────────────────────────────────────────
     print("[INFO] App shutting down")
@@ -62,6 +71,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.staticfiles import StaticFiles
+from fastapi import Response
+
+class CORSStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        return response
+
+app.mount("/uploads", CORSStaticFiles(directory="uploads"), name="uploads")
+
 # ── Routers ──────────────────────────────────────────────────────────
 API_PREFIX = "/api/v1"
 
@@ -70,6 +92,7 @@ app.include_router(line_stop_router,  prefix=f"{API_PREFIX}/line-stop",  tags=["
 app.include_router(repair_router,     prefix=f"{API_PREFIX}/repair",     tags=["Dies Repair"])
 app.include_router(preventive_router, prefix=f"{API_PREFIX}/preventive", tags=["Dies Preventive"])
 app.include_router(dashboard_router,  prefix=f"{API_PREFIX}/dashboard",  tags=["Dashboard"])
+app.include_router(attachments_router, prefix=f"{API_PREFIX}/attachments", tags=["Attachments"])
 
 
 # ── Health check ─────────────────────────────────────────────────────

@@ -63,3 +63,32 @@ def seed_admin(db: Session) -> None:
         db.add_all(dies)
         db.commit()
         print("[SEED] Seeded default dies")
+
+    # Seed default dies operations from TEMP_TR1_PCS_M and TEMP_TR2_PCS_M
+    from app.models.dies_task import DiesOperation
+    if db.query(DiesOperation).count() == 0:
+        from sqlalchemy import text
+        try:
+            # We seed from TEMP_TR1_PCS_M for machine '1200'
+            tr1_data = db.execute(text("SELECT DISTINCT PART_NO, OP, PROSES FROM TEMP_TR1_PCS_M")).all()
+            for row in tr1_data:
+                part_exists = db.query(Die).filter_by(part_no=row[0]).first() is not None
+                machine_exists = db.query(Machine).filter_by(machine_cd="1200").first() is not None
+                if part_exists and machine_exists:
+                    op = DiesOperation(part_no=row[0], machine_cd="1200", op=row[1], proses=row[2])
+                    db.add(op)
+            
+            # We seed from TEMP_TR2_PCS_M for machine '1600'
+            tr2_data = db.execute(text("SELECT DISTINCT PART_NO, OP, PROSES FROM TEMP_TR2_PCS_M")).all()
+            for row in tr2_data:
+                part_exists = db.query(Die).filter_by(part_no=row[0]).first() is not None
+                machine_exists = db.query(Machine).filter_by(machine_cd="1600").first() is not None
+                if part_exists and machine_exists:
+                    op = DiesOperation(part_no=row[0], machine_cd="1600", op=row[1], proses=row[2])
+                    db.add(op)
+            
+            db.commit()
+            print("[SEED] Seeded dies operations from TEMP_TR1_PCS_M and TEMP_TR2_PCS_M")
+        except Exception as e:
+            db.rollback()
+            print(f"[SEED] Failed to seed dies operations: {e}")

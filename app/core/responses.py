@@ -20,9 +20,10 @@ def success_response(
 
 
 def created_response(data: Any = None, message: str = "Data berhasil dibuat") -> JSONResponse:
+    from fastapi.encoders import jsonable_encoder
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
-        content={"success": True, "message": message, "data": data},
+        content=jsonable_encoder({"success": True, "message": message, "data": data}),
     )
 
 

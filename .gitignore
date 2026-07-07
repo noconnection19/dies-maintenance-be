@@ -60,3 +60,7 @@ Thumbs.db
 
 # Local Python artifacts
 pip-log.txt
+
+# Dynamic uploads and local database
+uploads/
+dies_maintenance.db
