@@ -355,47 +355,82 @@ def get_monitoring_dashboard(
             "transver3": occ_data["TR3"]
         })
 
-    # ── 9. Improvement PPM per Dies - Top 5 ─────────────────────────────
-    # Hitung perubahan PPM untuk tiap die di paruh pertama vs paruh kedua range
+    # ── 9. Improvement PPM per Problem (Lowest & Highest) ───────────────
+    # lowest PPM (improves)
+    lowest_query = text(f"""
+        SELECT 
+            ROUND(SUM(l.DURATION_LS) / NULLIF(SUM(l.PCS_M), 0) * 1000000) AS ppm, 
+            COUNT(*) AS Occ,
+            ms.SYSTEM_VALUE AS problem
+        FROM railway.DET_DIES_LINE_STOP l
+        JOIN railway.MSTR_SYSTEM ms ON l.PROBLEM_CD = ms.SYSTEM_CD 
+        WHERE ms.SYSTEM_TYPE = 'PROBLEM' AND {filter_str}
+        GROUP BY ms.SYSTEM_CD, ms.SYSTEM_VALUE
+        ORDER BY ppm ASC
+        LIMIT 5
+    """)
+    lowest_rows = db.execute(lowest_query, params).fetchall()
+    
     improves = []
-    worsens = []
-    
-    mid_date = datetime.strptime(start_date, "%Y-%m-%d") + (datetime.strptime(end_date, "%Y-%m-%d") - datetime.strptime(start_date, "%Y-%m-%d")) / 2
-    
-    for part_no, history in die_ppm_history.items():
-        first_half = [h[1] for h in history if h[0] < mid_date]
-        second_half = [h[1] for h in history if h[0] >= mid_date]
-        
-        if first_half and second_half:
-            avg_first = sum(first_half) / len(first_half)
-            avg_second = sum(second_half) / len(second_half)
-            diff = avg_second - avg_first
-            occ_count = len(history)
-            
-            die_data = {
-                "part_no": part_no,
-                "from_ppm": round(avg_first, 1),
-                "to_ppm": round(avg_second, 1),
-                "occ": occ_count,
-                "diff": round(abs(diff), 1)
-            }
-            
-            if diff < 0:
-                improves.append(die_data)
-            else:
-                worsens.append(die_data)
+    for r in lowest_rows:
+        prob = r._mapping.get("problem") or "Other"
+        occ_val = r._mapping.get("Occ") or 0
+        ppm_val = float(r._mapping.get("ppm") or 0)
+        improves.append({
+            "problem": prob,
+            "occ": occ_val,
+            "ppm": ppm_val,
+            # Backward compatibility keys
+            "part_no": prob,
+            "from_ppm": ppm_val,
+            "to_ppm": ppm_val,
+            "diff": 0.0
+        })
 
-    # Urutkan improves (penurunan PPM terbesar dulu)
-    improves.sort(key=lambda x: x["diff"], reverse=True)
-    # Urutkan worsens (kenaikan PPM terbesar dulu)
-    worsens.sort(key=lambda x: x["diff"], reverse=True)
+    # highest PPM (worsens)
+    highest_query = text(f"""
+        SELECT 
+            ROUND(SUM(l.DURATION_LS) / NULLIF(SUM(l.PCS_M), 0) * 1000000) AS ppm, 
+            COUNT(*) AS Occ,
+            ms.SYSTEM_VALUE AS problem
+        FROM railway.DET_DIES_LINE_STOP l
+        JOIN railway.MSTR_SYSTEM ms ON l.PROBLEM_CD = ms.SYSTEM_CD 
+        WHERE ms.SYSTEM_TYPE = 'PROBLEM' AND {filter_str}
+        GROUP BY ms.SYSTEM_CD, ms.SYSTEM_VALUE
+        ORDER BY ppm DESC
+        LIMIT 5
+    """)
+    highest_rows = db.execute(highest_query, params).fetchall()
+    
+    worsens = []
+    for r in highest_rows:
+        prob = r._mapping.get("problem") or "Other"
+        occ_val = r._mapping.get("Occ") or 0
+        ppm_val = float(r._mapping.get("ppm") or 0)
+        worsens.append({
+            "problem": prob,
+            "occ": occ_val,
+            "ppm": ppm_val,
+            # Backward compatibility keys
+            "part_no": prob,
+            "from_ppm": ppm_val,
+            "to_ppm": ppm_val,
+            "diff": 0.0
+        })
 
     # Fallback default data jika improves/worsens kosong (agar visualisasi di UI tetap rapi seperti mockup)
-    default_dies = ["BARI", "WARE", "EX SCRAP", "TRIAL TRIM PLUS", "TRIAL TRIM PLUS 2"]
     if not improves:
-        improves = [{"part_no": name, "from_ppm": 309.5, "to_ppm": 140.5, "occ": 112, "diff": 167.6} for name in default_dies]
+        default_names = ["Burry", "Loading / Unloading", "Scrap", "Profil Minus", "Finger"]
+        improves = [{
+            "problem": name, "occ": 112, "ppm": 550.0,
+            "part_no": name, "from_ppm": 550.0, "to_ppm": 550.0, "diff": 0.0
+        } for name in default_names]
     if not worsens:
-        worsens = [{"part_no": name, "from_ppm": 140.5, "to_ppm": 309.5, "occ": 112, "diff": 167.6} for name in default_dies]
+        default_names = ["Ware", "Kaziri", "Makure", "Surface Scratch", "Others"]
+        worsens = [{
+            "problem": name, "occ": 112, "ppm": 1200.0,
+            "part_no": name, "from_ppm": 1200.0, "to_ppm": 1200.0, "diff": 0.0
+        } for name in default_names]
 
     return success_response(data={
         "kpi": {
