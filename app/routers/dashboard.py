@@ -12,12 +12,12 @@ from app.models.user import User
 
 router = APIRouter()
 
-# Helper untuk memformat tanggal ke format string "MMM YYYY" (e.g., "Jul 2025")
+# Helper untuk memformat tanggal ke format string "MMM YY" (e.g., "Jul 25")
 def format_month_year(dt):
     if not dt:
         return ""
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    return f"{months[dt.month - 1]} {dt.year}"
+    return f"{months[dt.month - 1]} {str(dt.year)[-2:]}"
 
 @router.get("/monitoring", summary="Ambil data dashboard Line Stop Monitoring secara dinamis")
 def get_monitoring_dashboard(
@@ -120,6 +120,12 @@ def get_monitoring_dashboard(
     die_ppm_history = collections.defaultdict(list)
     line_ppm_sums = collections.defaultdict(float)
     line_ppm_counts = collections.defaultdict(int)
+    line_duration_ls = collections.defaultdict(float)
+    line_pcs_m = collections.defaultdict(float)
+    monthly_duration_ls = collections.defaultdict(float)
+    monthly_pcs_m = collections.defaultdict(float)
+    line_monthly_duration_ls = collections.defaultdict(lambda: collections.defaultdict(float))
+    line_monthly_pcs_m = collections.defaultdict(lambda: collections.defaultdict(float))
 
     total_duration_ls = 0.0
     total_duration_mh = 0.0
@@ -143,6 +149,19 @@ def get_monitoring_dashboard(
         # Tambahkan sum dan count PPM per line
         line_ppm_sums[r.LINE_CD] += ppm
         line_ppm_counts[r.LINE_CD] += 1
+        
+        # Accumulate PCS_M and DURATION_LS per line code
+        l_pcs = float(r.PCS_M) if (r.PCS_M is not None and float(r.PCS_M) > 0) else 6000.0
+        line_pcs_m[r.LINE_CD] += l_pcs
+        line_duration_ls[r.LINE_CD] += float(r.DURATION_LS) if r.DURATION_LS is not None else 0.0
+        
+        # Accumulate monthly totals for DURATION_LS and PCS_M
+        monthly_duration_ls[m_key] += float(r.DURATION_LS) if r.DURATION_LS is not None else 0.0
+        monthly_pcs_m[m_key] += l_pcs
+        
+        # Accumulate per line per month
+        line_monthly_duration_ls[m_key][r.LINE_CD] += float(r.DURATION_LS) if r.DURATION_LS is not None else 0.0
+        line_monthly_pcs_m[m_key][r.LINE_CD] += l_pcs
         
         prob = r.PROBLEM.strip() if r.PROBLEM else "Other"
         if not prob:
@@ -171,26 +190,20 @@ def get_monitoring_dashboard(
 
     # Hitung worst line dengan query terpisah berdasarkan occurrence terbanyak
     worst_line_query = text(f"""
-        SELECT count(*) AS occ, a.LINE_NAME, a.LINE_CD
+        SELECT a.LINE_NAME
         FROM railway.DET_DIES_LINE_STOP l
         JOIN railway.MSTR_LINE a ON a.LINE_CD = l.LINE_CD 
         WHERE {filter_str}
         GROUP BY a.LINE_CD, a.LINE_NAME
-        ORDER BY occ DESC
+        ORDER BY count(*) DESC
         LIMIT 1
     """)
     worst_line_row = db.execute(worst_line_query, params).fetchone()
     if worst_line_row:
         worst_line_name = worst_line_row.LINE_NAME
-        worst_line_cd = worst_line_row.LINE_CD
-        
-        # Hitung PPM worst line di Python berdasarkan list 'rows'
-        worst_line_duration_ls = sum(float(r.DURATION_LS) for r in rows if r.LINE_CD == worst_line_cd)
-        worst_line_pcs_m = sum(float(r.PCS_M) if (r.PCS_M is not None and float(r.PCS_M) > 0) else 6000.0 for r in rows if r.LINE_CD == worst_line_cd)
-        worst_line_ppm = (worst_line_duration_ls / worst_line_pcs_m * 1000000.0) if worst_line_pcs_m > 0 else 0.0
     else:
         worst_line_name = "-"
-        worst_line_ppm = 0.0
+    worst_line_ppm = 0.0
 
     # ── 5. PPM Monthly Monitoring Chart ──────────────────────────────────
     sorted_months = sorted(list(monthly_data.keys()))
@@ -201,17 +214,20 @@ def get_monitoring_dashboard(
         m_name = format_month_year(dt_month)
         
         # Hitung PPM rata-rata per line di bulan ini
-        # TD1 -> TANDEM, TR1 -> TRANSVER 1, dst.
+        # TD -> TANDEM, TR1 -> TRANSVER 1, dst.
         line_ppms = {"TANDEM": 0.0, "TRANSVER 1": 0.0, "TRANSVER 2": 0.0, "TRANSVER 3": 0.0, "BLANKING": 0.0}
         
-        for l_code in ["TD1", "TR1", "TR2", "TR3", "BL"]:
-            month_l_ppms = line_monthly_duration[m_key][l_code]
-            avg_l_ppm = sum(month_l_ppms) / len(month_l_ppms) if month_l_ppms else 0.0
+        for l_code in ["TD", "TR1", "TR2", "TR3", "BL"]:
+            l_dur = line_monthly_duration_ls[m_key][l_code]
+            l_pcs = line_monthly_pcs_m[m_key][l_code]
+            avg_l_ppm = (l_dur / l_pcs * 1000000.0) if l_pcs > 0 else 0.0
             
-            key_name = "TANDEM" if l_code == "TD1" else ("BLANKING" if l_code == "BL" else f"TRANSVER {l_code[-1]}")
+            key_name = "TANDEM" if l_code == "TD" else ("BLANKING" if l_code == "BL" else f"TRANSVER {l_code[-1]}")
             line_ppms[key_name] = avg_l_ppm
             
-        m_avg_ppm = sum(monthly_data[m_key]) / len(monthly_data[m_key]) if monthly_data[m_key] else 0.0
+        m_dur = monthly_duration_ls[m_key]
+        m_pcs = monthly_pcs_m[m_key]
+        m_avg_ppm = (m_dur / m_pcs * 1000000.0) if m_pcs > 0 else 0.0
 
         monthly_chart_list.append({
             "month": m_name,
@@ -241,22 +257,21 @@ def get_monitoring_dashboard(
 
     # ── 6. Line Details Cards ───────────────────────────────────────────
     def get_line_metrics(lines_list):
-        total_l_ppm = 0.0
-        total_l_count = 0
-        total_l_mh = 0.0
+        total_l_duration_ls = 0.0
+        total_l_pcs_m = 0.0
         for l_code in lines_list:
-            total_l_ppm += line_ppm_sums[l_code]
-            total_l_count += line_ppm_counts[l_code]
-            total_l_mh += line_mh[l_code]
+            total_l_duration_ls += line_duration_ls[l_code]
+            total_l_pcs_m += line_pcs_m[l_code]
         
-        avg_l_ppm = total_l_ppm / total_l_count if total_l_count > 0 else 0.0
+        ppm = (total_l_duration_ls / total_l_pcs_m * 1000000.0) if total_l_pcs_m > 0 else 0.0
+        hours = total_l_duration_ls / 60.0
         return {
-            "ppm": round(avg_l_ppm, 1),
-            "hours": round(total_l_mh / 60.0, 1)
+            "ppm": round(ppm, 1),
+            "hours": round(hours, 1)
         }
 
     line_details = {
-        "tandem": get_line_metrics(["TD1"]),
+        "tandem": get_line_metrics(["TD"]),
         "blanking": get_line_metrics(["BL"]),
         "transver": get_line_metrics(["TR1", "TR2", "TR3"])
     }
@@ -291,7 +306,7 @@ def get_monitoring_dashboard(
         trend_list.append({
             "month": m_name,
             "blanking": occ_data["BL"],
-            "tandem": occ_data["TD1"],
+            "tandem": occ_data["TD"],
             "transver1": occ_data["TR1"],
             "transver2": occ_data["TR2"],
             "transver3": occ_data["TR3"]
