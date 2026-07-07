@@ -18,3 +18,6 @@ python-multipart>=0.0.7
 
 # Optional: Alembic untuk database migrations
 # alembic==1.13.1
+
+# Multipart Form Data
+python-multipart==0.0.32
