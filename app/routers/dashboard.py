@@ -62,14 +62,38 @@ def get_monitoring_dashboard(
     
     rows = db.execute(raw_query, params).fetchall()
 
+    # Ambil total count incident line stop dalam range filter
+    incident_count_query = text(f"""
+        SELECT COUNT(*) FROM railway.DET_DIES_LINE_STOP l
+        WHERE {filter_str}
+    """)
+    incident_count = db.execute(incident_count_query, params).scalar() or 0
+
+    # Hitung target PPM secara dinamis: 1721 * jumlah bulan dalam range
+    start_dt_calc = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt_calc = datetime.strptime(end_date, "%Y-%m-%d")
+    months_diff = (end_dt_calc.year - start_dt_calc.year) * 12 + end_dt_calc.month - start_dt_calc.month + 1
+    if months_diff <= 0:
+        months_diff = 1
+    ppm_target = 1721 * months_diff
+
+    # ── PPM Current: SUM(DURATION_LS) / SUM(PCS_M) * 1,000,000 ──────────
+    # Menggunakan perkalian float (1000000.0) dan NULLIF untuk menghindari pembagian integer (selalu 0) dan pembagian dengan 0
+    ppm_current_query = text(f"""
+        SELECT (SUM(l.DURATION_LS) * 1000000.0) / NULLIF(SUM(l.PCS_M), 0) AS ppm_value
+        FROM railway.DET_DIES_LINE_STOP l
+        WHERE {filter_str}
+    """)
+    ppm_current_value = db.execute(ppm_current_query, params).scalar() or 0
+
     # Jika tidak ada data, kembalikan response kosong terstruktur
     if not rows:
         return success_response(data={
             "kpi": {
-                "ppm_current": 0, "ppm_target": 2700, "ppm_change": 0,
+                "ppm_current": 0, "ppm_target": ppm_target, "ppm_change": 0,
                 "avg_ppm": 0, "avg_mh_hours": 0, "avg_mh_change": 0,
-                "incident_occ": 0, "incident_change": 0,
-                "worst_line_name": "-", "worst_line_ppm": 0, "worst_line_change": 0
+                "incident_occ": incident_count, "incident_change": 0,
+                "worst_line_name": "-", "worst_line_ppm": 0, "worst_line_target": ppm_target, "worst_line_change": 0
             },
             "monthly_monitoring": [],
             "best_month_name": "-", "best_month_value": 0,
@@ -94,11 +118,15 @@ def get_monitoring_dashboard(
     line_counts = collections.defaultdict(int)
     problem_counts = collections.defaultdict(int)
     die_ppm_history = collections.defaultdict(list)
+    line_ppm_sums = collections.defaultdict(float)
+    line_ppm_counts = collections.defaultdict(int)
 
     total_duration_ls = 0.0
     total_duration_mh = 0.0
     total_ppm_sum = 0.0
     total_ppm_count = 0
+    total_pcs_m = 0.0
+
 
     for r in rows:
         dt = r.REPAIRED_DT
@@ -112,6 +140,10 @@ def get_monitoring_dashboard(
         line_mh[r.LINE_CD] += float(r.DURATION_MH)
         line_counts[r.LINE_CD] += 1
         
+        # Tambahkan sum dan count PPM per line
+        line_ppm_sums[r.LINE_CD] += ppm
+        line_ppm_counts[r.LINE_CD] += 1
+        
         prob = r.PROBLEM.strip() if r.PROBLEM else "Other"
         if not prob:
             prob = "Other"
@@ -122,31 +154,43 @@ def get_monitoring_dashboard(
         
         total_duration_ls += float(r.DURATION_LS)
         total_duration_mh += float(r.DURATION_MH)
+        total_pcs_m += float(r.PCS_M) if (r.PCS_M is not None and float(r.PCS_M) > 0) else 6000.0
         total_ppm_sum += ppm
         total_ppm_count += 1
 
     # ── 4. Bangun response KPI ───────────────────────────────────────────
-    avg_ppm = total_ppm_sum / total_ppm_count if total_ppm_count > 0 else 0
-    total_mh_hours = total_duration_mh / 60.0
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    total_days = (end_dt - start_dt).days + 1
+    if total_days <= 0:
+        total_days = 1
 
-    # Hitung worst line
-    worst_line_name = "-"
-    worst_line_ppm = 0.0
-    
-    # Kelompokkan PPM per line untuk mencari worst line
-    line_ppm_sums = collections.defaultdict(float)
-    line_ppm_counts = collections.defaultdict(int)
-    for r in rows:
-        ppm = calc_ppm(r.DURATION_LS, r.PCS_M)
-        line_ppm_sums[r.LINE_CD] += ppm
-        line_ppm_counts[r.LINE_CD] += 1
+    overall_ppm_vs_target = (total_duration_ls / total_pcs_m * 1000000) if total_pcs_m > 0 else 0
+    avg_ppm = overall_ppm_vs_target / total_days
+    total_mh_hours = (total_duration_mh / 60.0) / total_days
 
-    for l_code, l_sum in line_ppm_sums.items():
-        l_count = line_ppm_counts[l_code]
-        l_avg = l_sum / l_count if l_count > 0 else 0
-        if l_avg > worst_line_ppm:
-            worst_line_ppm = l_avg
-            worst_line_name = "Tandem" if l_code == "TD1" else ("Blanking" if l_code == "BL" else l_code)
+    # Hitung worst line dengan query terpisah berdasarkan occurrence terbanyak
+    worst_line_query = text(f"""
+        SELECT count(*) AS occ, a.LINE_NAME, a.LINE_CD
+        FROM railway.DET_DIES_LINE_STOP l
+        JOIN railway.MSTR_LINE a ON a.LINE_CD = l.LINE_CD 
+        WHERE {filter_str}
+        GROUP BY a.LINE_CD, a.LINE_NAME
+        ORDER BY occ DESC
+        LIMIT 1
+    """)
+    worst_line_row = db.execute(worst_line_query, params).fetchone()
+    if worst_line_row:
+        worst_line_name = worst_line_row.LINE_NAME
+        worst_line_cd = worst_line_row.LINE_CD
+        
+        # Hitung PPM worst line di Python berdasarkan list 'rows'
+        worst_line_duration_ls = sum(float(r.DURATION_LS) for r in rows if r.LINE_CD == worst_line_cd)
+        worst_line_pcs_m = sum(float(r.PCS_M) if (r.PCS_M is not None and float(r.PCS_M) > 0) else 6000.0 for r in rows if r.LINE_CD == worst_line_cd)
+        worst_line_ppm = (worst_line_duration_ls / worst_line_pcs_m * 1000000.0) if worst_line_pcs_m > 0 else 0.0
+    else:
+        worst_line_name = "-"
+        worst_line_ppm = 0.0
 
     # ── 5. PPM Monthly Monitoring Chart ──────────────────────────────────
     sorted_months = sorted(list(monthly_data.keys()))
@@ -297,16 +341,17 @@ def get_monitoring_dashboard(
 
     return success_response(data={
         "kpi": {
-            "ppm_current": round(monthly_chart_list[-1]["overall_ppm"] if monthly_chart_list else avg_ppm, 0),
-            "ppm_target": 2700,
+            "ppm_current": round(float(ppm_current_value), 0),
+            "ppm_target": ppm_target,
             "ppm_change": 200, # Mockup indicator
             "avg_ppm": round(avg_ppm, 0),
             "avg_mh_hours": round(total_mh_hours, 0),
             "avg_mh_change": 200,
-            "incident_occ": total_ppm_count,
+            "incident_occ": incident_count,
             "incident_change": 12,
             "worst_line_name": worst_line_name,
             "worst_line_ppm": round(worst_line_ppm, 0),
+            "worst_line_target": ppm_target,
             "worst_line_change": 100
         },
         "monthly_monitoring": monthly_chart_list,
