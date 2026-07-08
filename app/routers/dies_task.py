@@ -24,7 +24,7 @@ def make_dies_router(task_type: TaskType) -> APIRouter:
     """Kembalikan APIRouter CRUD lengkap yang terkunci pada `task_type` tertentu."""
     router = APIRouter()
 
-    @router.get("/", summary=f"Daftar {task_type.value}")
+    @router.get("", summary=f"Daftar {task_type.value}")
     def list_tasks(
         page: int = Query(1, ge=1),
         size: int = Query(20, ge=1, le=100),
@@ -40,7 +40,7 @@ def make_dies_router(task_type: TaskType) -> APIRouter:
             size=size,
         )
 
-    @router.post("/", status_code=status.HTTP_201_CREATED, summary=f"Buat {task_type.value} baru")
+    @router.post("", status_code=status.HTTP_201_CREATED, summary=f"Buat {task_type.value} baru")
     def create_task(
         body: TaskCreateRequest,
         db: Session = Depends(get_db),
