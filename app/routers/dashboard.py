@@ -379,7 +379,7 @@ def get_monitoring_dashboard(
             month_data_map[m_name]["blanking"] = occ
         elif line_name == "TANDEM":
             month_data_map[m_name]["tandem"] = occ
-        elif line_name == "TRANSVER":
+        elif line_name == "TRANSVER" or line_name == "TRANSFER":
             month_data_map[m_name]["transver"] = occ
 
     trend_list = []
