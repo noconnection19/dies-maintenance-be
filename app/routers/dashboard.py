@@ -214,15 +214,15 @@ def get_monitoring_dashboard(
         m_name = format_month_year(dt_month)
         
         # Hitung PPM rata-rata per line di bulan ini
-        # TD -> TANDEM, TR1 -> TRANSVER 1, dst.
-        line_ppms = {"TANDEM": 0.0, "TRANSVER 1": 0.0, "TRANSVER 2": 0.0, "TRANSVER 3": 0.0, "BLANKING": 0.0}
+        # TD -> TANDEM, TR -> TRANSVER, BL -> BLANKING
+        line_ppms = {"TANDEM": 0.0, "TRANSVER": 0.0, "BLANKING": 0.0}
         
-        for l_code in ["TD", "TR1", "TR2", "TR3", "BL"]:
+        for l_code in ["TD", "TR", "BL"]:
             l_dur = line_monthly_duration_ls[m_key][l_code]
             l_pcs = line_monthly_pcs_m[m_key][l_code]
             avg_l_ppm = (l_dur / l_pcs * 1000000.0) if l_pcs > 0 else 0.0
             
-            key_name = "TANDEM" if l_code == "TD" else ("BLANKING" if l_code == "BL" else f"TRANSVER {l_code[-1]}")
+            key_name = "TANDEM" if l_code == "TD" else ("BLANKING" if l_code == "BL" else "TRANSVER")
             line_ppms[key_name] = avg_l_ppm
             
         m_dur = monthly_duration_ls[m_key]
@@ -233,9 +233,7 @@ def get_monitoring_dashboard(
             "month": m_name,
             "overall_ppm": round(m_avg_ppm, 1),
             "tandem": round(line_ppms["TANDEM"], 1),
-            "transver1": round(line_ppms["TRANSVER 1"], 1),
-            "transver2": round(line_ppms["TRANSVER 2"], 1),
-            "transver3": round(line_ppms["TRANSVER 3"], 1),
+            "transver": round(line_ppms["TRANSVER"], 1),
             "blanking": round(line_ppms["BLANKING"], 1)
         })
 
@@ -273,7 +271,7 @@ def get_monitoring_dashboard(
             SUM(l.DURATION_LS) as total_dur,
             SUM(l.PCS_M) as total_pcs
         FROM railway.DET_DIES_LINE_STOP l
-        WHERE l.LINE_CD IN ('TD', 'BL', 'TR1', 'TR2', 'TR3') AND {line_filter_str}
+        WHERE l.LINE_CD IN ('TD', 'BL', 'TR') AND {line_filter_str}
         GROUP BY l.LINE_CD
     """)
     line_details_rows = db.execute(line_details_query, line_params).fetchall()
@@ -281,9 +279,7 @@ def get_monitoring_dashboard(
     line_sums = {
         "TD": {"dur": 0.0, "pcs": 0.0},
         "BL": {"dur": 0.0, "pcs": 0.0},
-        "TR1": {"dur": 0.0, "pcs": 0.0},
-        "TR2": {"dur": 0.0, "pcs": 0.0},
-        "TR3": {"dur": 0.0, "pcs": 0.0},
+        "TR": {"dur": 0.0, "pcs": 0.0},
     }
     for row in line_details_rows:
         l_cd = row.LINE_CD
@@ -303,10 +299,7 @@ def get_monitoring_dashboard(
     line_details = {
         "tandem": format_metrics(line_sums["TD"]["dur"], line_sums["TD"]["pcs"]),
         "blanking": format_metrics(line_sums["BL"]["dur"], line_sums["BL"]["pcs"]),
-        "transver": format_metrics(
-            line_sums["TR1"]["dur"] + line_sums["TR2"]["dur"] + line_sums["TR3"]["dur"],
-            line_sums["TR1"]["pcs"] + line_sums["TR2"]["pcs"] + line_sums["TR3"]["pcs"]
-        )
+        "transver": format_metrics(line_sums["TR"]["dur"], line_sums["TR"]["pcs"])
     }
 
     # ── 7. Breakdown Problem per Categories ──────────────────────────────
@@ -348,7 +341,7 @@ def get_monitoring_dashboard(
     trend_rows = db.execute(trend_query, params).fetchall()
     
     month_data_map = collections.defaultdict(lambda: {
-        "blanking": 0, "tandem": 0, "transver1": 0, "transver2": 0, "transver3": 0
+        "blanking": 0, "tandem": 0, "transver": 0
     })
     
     for row in trend_rows:
@@ -362,16 +355,12 @@ def get_monitoring_dashboard(
         except Exception:
             m_name = month_str
             
-        if line_name == "BLAKING":
+        if line_name == "BLAKING" or line_name == "BLANKING":
             month_data_map[m_name]["blanking"] = occ
         elif line_name == "TANDEM":
             month_data_map[m_name]["tandem"] = occ
-        elif line_name == "TRANSVER 1":
-            month_data_map[m_name]["transver1"] = occ
-        elif line_name == "TRANSVER 2":
-            month_data_map[m_name]["transver2"] = occ
-        elif line_name == "TRANSVER 3":
-            month_data_map[m_name]["transver3"] = occ
+        elif line_name == "TRANSVER":
+            month_data_map[m_name]["transver"] = occ
 
     trend_list = []
     for m_key in sorted_months:
@@ -379,16 +368,14 @@ def get_monitoring_dashboard(
         m_name = format_month_year(dt_month)
         
         pivoted = month_data_map.get(m_name) or {
-            "blanking": 0, "tandem": 0, "transver1": 0, "transver2": 0, "transver3": 0
+            "blanking": 0, "tandem": 0, "transver": 0
         }
         
         trend_list.append({
             "month": m_name,
             "blanking": pivoted["blanking"],
             "tandem": pivoted["tandem"],
-            "transver1": pivoted["transver1"],
-            "transver2": pivoted["transver2"],
-            "transver3": pivoted["transver3"]
+            "transver": pivoted["transver"]
         })
 
     # ── 9. Improvement PPM per Problem (Lowest & Highest) ───────────────
