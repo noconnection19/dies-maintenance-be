@@ -77,14 +77,15 @@ def get_monitoring_dashboard(
         months_diff = 1
     ppm_target = 1721 * months_diff
 
-    # ── PPM Current: SUM(DURATION_LS) / SUM(PCS_M) * 1,000,000 ──────────
-    # Menggunakan perkalian float (1000000.0) dan NULLIF untuk menghindari pembagian integer (selalu 0) dan pembagian dengan 0
+    # ── PPM Current: SUM(DURATION_LS) / TOTAL_STROKE * 1,000,000 ──────────
     ppm_current_query = text(f"""
-        SELECT (SUM(l.DURATION_LS) * 1000000.0) / NULLIF(SUM(l.PCS_M), 0) AS ppm_value
+        SELECT (SUM(l.DURATION_LS) * 1000000.0) / NULLIF(dps.TOTAL_STROKE, 0) AS ppm_value
         FROM railway.DET_DIES_LINE_STOP l
+        JOIN railway.DET_PPM_STROKE dps ON DATE_FORMAT(l.REPAIRED_DT, '%Y-%m') = dps.PPM_STROKE_MONTH
         WHERE {filter_str}
+        GROUP BY dps.TOTAL_STROKE
     """)
-    ppm_current_value = db.execute(ppm_current_query, params).scalar() or 0
+    ppm_current_value = float(db.execute(ppm_current_query, params).scalar() or 0.0)
 
     # Jika tidak ada data, kembalikan response kosong terstruktur
     if not rows:
@@ -105,10 +106,17 @@ def get_monitoring_dashboard(
         })
 
     # ── 3. Proses Data di Python (Ponytail: Borongan, minim roundtrip DB) ──
-    # PPM per record = DURATION_LS * 1,000,000 / COALESCE(PCS_M, 6000)
-    def calc_ppm(duration_ls, pcs_m):
-        pcs = float(pcs_m) if (pcs_m is not None and float(pcs_m) > 0) else 6000.0
-        return (float(duration_ls) * 1000000.0) / pcs
+    # Ambil data stroke per bulan
+    stroke_rows = db.execute(text("SELECT PPM_STROKE_MONTH, TOTAL_STROKE FROM railway.DET_PPM_STROKE")).fetchall()
+    monthly_strokes = {row.PPM_STROKE_MONTH: float(row.TOTAL_STROKE) for row in stroke_rows}
+
+    # PPM per record = DURATION_LS * 1,000,000 / TOTAL_STROKE of that month
+    def calc_ppm(duration_ls, dt):
+        m_str = f"{dt.year}-{dt.month:02d}"
+        stroke = monthly_strokes.get(m_str, 6000.0)
+        if stroke <= 0:
+            stroke = 6000.0
+        return (float(duration_ls) * 1000000.0) / stroke
 
     # Pengelompokan bulanan
     monthly_data = collections.defaultdict(list)
@@ -137,7 +145,7 @@ def get_monitoring_dashboard(
     for r in rows:
         dt = r.REPAIRED_DT
         m_key = (dt.year, dt.month)
-        ppm = calc_ppm(r.DURATION_LS, r.PCS_M)
+        ppm = calc_ppm(r.DURATION_LS, dt)
         
         monthly_data[m_key].append(ppm)
         line_monthly_duration[m_key][r.LINE_CD].append(ppm)
@@ -184,7 +192,16 @@ def get_monitoring_dashboard(
     if total_days <= 0:
         total_days = 1
 
-    overall_ppm_vs_target = (total_duration_ls / total_pcs_m * 1000000) if total_pcs_m > 0 else 0
+    total_stroke_query = text("""
+        SELECT TOTAL_STROKE 
+        FROM railway.DET_PPM_STROKE 
+        WHERE PPM_STROKE_MONTH BETWEEN DATE_FORMAT(:start_date, '%Y-%m') AND DATE_FORMAT(:end_date, '%Y-%m')
+    """)
+    total_stroke = float(db.execute(total_stroke_query, {"start_date": start_dt, "end_date": end_dt}).scalar() or 0.0)
+    if total_stroke <= 0:
+        total_stroke = 6000.0
+
+    overall_ppm_vs_target = (total_duration_ls / total_stroke * 1000000)
     avg_ppm = overall_ppm_vs_target / total_days
     total_mh_hours = (total_duration_mh / 60.0) / total_days
 
@@ -217,17 +234,20 @@ def get_monitoring_dashboard(
         # TD -> TANDEM, TR -> TRANSVER, BL -> BLANKING
         line_ppms = {"TANDEM": 0.0, "TRANSVER": 0.0, "BLANKING": 0.0}
         
+        m_str = f"{m_key[0]}-{m_key[1]:02d}"
+        stroke = monthly_strokes.get(m_str, 6000.0)
+        if stroke <= 0:
+            stroke = 6000.0
+            
         for l_code in ["TD", "TR", "BL"]:
             l_dur = line_monthly_duration_ls[m_key][l_code]
-            l_pcs = line_monthly_pcs_m[m_key][l_code]
-            avg_l_ppm = (l_dur / l_pcs * 1000000.0) if l_pcs > 0 else 0.0
+            avg_l_ppm = (l_dur / stroke * 1000000.0)
             
             key_name = "TANDEM" if l_code == "TD" else ("BLANKING" if l_code == "BL" else "TRANSVER")
             line_ppms[key_name] = avg_l_ppm
             
         m_dur = monthly_duration_ls[m_key]
-        m_pcs = monthly_pcs_m[m_key]
-        m_avg_ppm = (m_dur / m_pcs * 1000000.0) if m_pcs > 0 else 0.0
+        m_avg_ppm = (m_dur / stroke * 1000000.0)
 
         monthly_chart_list.append({
             "month": m_name,
@@ -287,8 +307,8 @@ def get_monitoring_dashboard(
             line_sums[l_cd]["dur"] = float(row.total_dur or 0)
             line_sums[l_cd]["pcs"] = float(row.total_pcs or 0)
 
-    def format_metrics(dur, pcs):
-        ppm = (dur / pcs * 1000000.0) if pcs > 0 else 0.0
+    def format_metrics(dur, stroke_val):
+        ppm = (dur / stroke_val * 1000000.0) if stroke_val > 0 else 0.0
         hours = ppm / 60.0
         return {
             "ppm": round(ppm, 1),
@@ -297,9 +317,9 @@ def get_monitoring_dashboard(
 
 
     line_details = {
-        "tandem": format_metrics(line_sums["TD"]["dur"], line_sums["TD"]["pcs"]),
-        "blanking": format_metrics(line_sums["BL"]["dur"], line_sums["BL"]["pcs"]),
-        "transver": format_metrics(line_sums["TR"]["dur"], line_sums["TR"]["pcs"])
+        "tandem": format_metrics(line_sums["TD"]["dur"], total_stroke),
+        "blanking": format_metrics(line_sums["BL"]["dur"], total_stroke),
+        "transver": format_metrics(line_sums["TR"]["dur"], total_stroke)
     }
 
     # ── 7. Breakdown Problem per Categories ──────────────────────────────
@@ -378,17 +398,17 @@ def get_monitoring_dashboard(
             "transver": pivoted["transver"]
         })
 
-    # ── 9. Improvement PPM per Problem (Lowest & Highest) ───────────────
     # lowest PPM (improves)
     lowest_query = text(f"""
         SELECT 
-            ROUND(SUM(l.DURATION_LS) / NULLIF(SUM(l.PCS_M), 0) * 1000000) AS ppm, 
+            ROUND(SUM(l.DURATION_LS) / dps.TOTAL_STROKE * 1000000) AS ppm, 
             COUNT(*) AS Occ,
             ms.SYSTEM_VALUE AS problem
         FROM railway.DET_DIES_LINE_STOP l
         JOIN railway.MSTR_SYSTEM ms ON l.PROBLEM_CD = ms.SYSTEM_CD 
+        JOIN railway.DET_PPM_STROKE dps ON DATE_FORMAT(l.REPAIRED_DT, '%Y-%m') = dps.PPM_STROKE_MONTH
         WHERE ms.SYSTEM_TYPE = 'PROBLEM' AND {filter_str}
-        GROUP BY ms.SYSTEM_CD, ms.SYSTEM_VALUE
+        GROUP BY ms.SYSTEM_VALUE
         ORDER BY ppm ASC
         LIMIT 5
     """)
@@ -413,13 +433,14 @@ def get_monitoring_dashboard(
     # highest PPM (worsens)
     highest_query = text(f"""
         SELECT 
-            ROUND(SUM(l.DURATION_LS) / NULLIF(SUM(l.PCS_M), 0) * 1000000) AS ppm, 
+            ROUND(SUM(l.DURATION_LS) / dps.TOTAL_STROKE * 1000000) AS ppm, 
             COUNT(*) AS Occ,
             ms.SYSTEM_VALUE AS problem
         FROM railway.DET_DIES_LINE_STOP l
         JOIN railway.MSTR_SYSTEM ms ON l.PROBLEM_CD = ms.SYSTEM_CD 
+        JOIN railway.DET_PPM_STROKE dps ON DATE_FORMAT(l.REPAIRED_DT, '%Y-%m') = dps.PPM_STROKE_MONTH
         WHERE ms.SYSTEM_TYPE = 'PROBLEM' AND {filter_str}
-        GROUP BY ms.SYSTEM_CD, ms.SYSTEM_VALUE
+        GROUP BY ms.SYSTEM_VALUE
         ORDER BY ppm DESC
         LIMIT 5
     """)
