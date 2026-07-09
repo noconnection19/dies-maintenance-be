@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "Dies Maintenance API"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
+    MAINTENANCE_MODE: bool = False
 
     # ── Database ─────────────────────────────────────────────────────
     # Format: mysql+pymysql://user:password@host:port/dbname

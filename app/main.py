@@ -5,7 +5,8 @@ Menjalankan server:
     uvicorn app.main:app --reload
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -71,6 +72,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def maintenance_middleware(request: Request, call_next):
+    # ponytail: O(1) checks for MAINTENANCE_MODE before forwarding request
+    if settings.MAINTENANCE_MODE and request.method != "OPTIONS" and request.url.path not in ["/", "/health", "/api/v1/health"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Server sedang dalam pemeliharaan terjadwal. Silakan coba beberapa saat lagi."
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
+    return await call_next(request)
 
 from fastapi.staticfiles import StaticFiles
 from fastapi import Response
