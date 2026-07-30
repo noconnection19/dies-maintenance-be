@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # 8 jam
 
+    def __init__(self, **values):
+        super().__init__(**values)
+        if not self.DEBUG and self.SECRET_KEY == "change-this-to-a-long-random-secret-in-production":
+            raise ValueError("SECRET_KEY wajib diubah di file .env sebelum dijalankan pada mode produksi!")
+
+
     # ── CORS ─────────────────────────────────────────────────────────
     CORS_ORIGINS: List[str] = [
         "http://localhost",

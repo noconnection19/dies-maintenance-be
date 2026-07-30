@@ -3,6 +3,7 @@ Fungsi internal/admin yang dijalankan saat startup.
 
 Tidak diekspos sebagai endpoint publik.
 """
+import os
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
@@ -11,18 +12,21 @@ from app.models.dies_task import Line, Machine, Die
 
 
 def seed_admin(db: Session) -> None:
-    """Buat akun admin default jika tabel users masih kosong."""
+    """Create default admin user if users table is empty."""
     if db.query(User).count() == 0:
+        admin_pass = os.getenv("ADMIN_PASSWORD", "admin123")
         admin = User(
             username="admin",
             full_name="Administrator",
             role="Admin",
-            hashed_password=hash_password("admin123"),
+            hashed_password=hash_password(admin_pass),
         )
         db.add(admin)
         db.commit()
-        print("[SEED] Seeded default admin  (username: admin / password: admin123)")
-        print("[WARNING] Segera ganti password default setelah login pertama!")
+        print(f"[SEED] Seeded initial admin account (username: admin)")
+        if admin_pass == "admin123":
+            print("[WARNING] Using default password 'admin123'. Change it after initial login or set ADMIN_PASSWORD in environment.")
+
 
     # Seed default lines
     if db.query(Line).count() == 0:

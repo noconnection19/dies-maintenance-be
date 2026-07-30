@@ -67,9 +67,8 @@ register_exception_handlers(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_origin_regex=".*",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
 )
 
@@ -81,27 +80,14 @@ async def maintenance_middleware(request: Request, call_next):
             status_code=503,
             content={
                 "detail": "Server sedang dalam pemeliharaan terjadwal. Silakan coba beberapa saat lagi."
-            },
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "*",
-                "Access-Control-Allow-Headers": "*",
             }
         )
     return await call_next(request)
 
 from fastapi.staticfiles import StaticFiles
-from fastapi import Response
 
-class CORSStaticFiles(StaticFiles):
-    async def get_response(self, path: str, scope) -> Response:
-        response = await super().get_response(path, scope)
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        return response
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-app.mount("/uploads", CORSStaticFiles(directory="uploads"), name="uploads")
 
 # ── Routers ──────────────────────────────────────────────────────────
 API_PREFIX = "/api/v1"
