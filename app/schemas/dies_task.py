@@ -24,10 +24,39 @@ class PartOrderHeaderSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PartOrderCreateRequest(BaseModel):
+    details: List[PartOrderDetailSchema]
+
+
+
 # ── Master Schemas ───────────────────────────────────────────────────
+class CompanyResponse(BaseModel):
+    company_cd:   str
+    plant_cd:     str
+    company_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ModelResponse(BaseModel):
+    model:      str
+    model_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+
+class RoleResponse(BaseModel):
+    role_cd:   str
+    role_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LineResponse(BaseModel):
-    line_cd:   str
-    line_name: str
+    line_cd:    str
+    line_name:  str
+    company_cd: Optional[str] = None
+    plant_cd:   Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -36,13 +65,18 @@ class MachineResponse(BaseModel):
     machine_cd:   str
     line_cd:      str
     machine_name: str
+    company_cd:   Optional[str] = None
+    plant_cd:     Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class DieResponse(BaseModel):
-    part_no: str
-    model:   Optional[str] = None
+    part_no:    str
+    part_name:  Optional[str] = None
+    model:      Optional[str] = None
+    company_cd: Optional[str] = None
+    plant_cd:   Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,6 +96,9 @@ class TaskCreateRequest(BaseModel):
     part_no:                 Optional[str] = None
     line_cd:                 Optional[str] = None
     machine_cd:              Optional[str] = None
+    company_cd:              Optional[str] = None
+    plant_cd:                Optional[str] = None
+    approval_id:             Optional[str] = None
     operation_seq:           Optional[str] = None
     shift:                   Optional[str] = None
     model:                   Optional[str] = None
@@ -88,6 +125,9 @@ class TaskUpdateRequest(BaseModel):
     part_no:                 Optional[str] = None
     line_cd:                 Optional[str] = None
     machine_cd:              Optional[str] = None
+    company_cd:              Optional[str] = None
+    plant_cd:                Optional[str] = None
+    approval_id:             Optional[str] = None
     operation_seq:           Optional[str] = None
     shift:                   Optional[str] = None
     model:                   Optional[str] = None
@@ -116,6 +156,9 @@ class TaskResponse(BaseModel):
     part_no:                 Optional[str] = None
     line_cd:                 Optional[str] = None
     machine_cd:              Optional[str] = None
+    company_cd:              Optional[str] = None
+    plant_cd:                Optional[str] = None
+    approval_id:             Optional[str] = None
     operation_seq:           Optional[str] = None
     shift:                   Optional[str] = None
     model:                   Optional[str] = None

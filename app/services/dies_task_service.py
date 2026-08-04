@@ -97,6 +97,34 @@ def create_task(
 
     print(f"[DEBUG] create_task payload received: {payload}")
     payload['status'] = '1'  # Always start as On Progress
+    if not payload.get('operation_seq'):
+        payload['operation_seq'] = "10"
+
+    if not payload.get('company_cd') or not payload.get('plant_cd'):
+        from app.models.dies_task import Die
+        die = db.query(Die).filter(Die.part_no == payload.get('part_no')).first() if payload.get('part_no') else None
+        if die:
+            if not payload.get('company_cd'):
+                payload['company_cd'] = die.company_cd or "1000"
+            if not payload.get('plant_cd'):
+                payload['plant_cd'] = die.plant_cd or "1100"
+        else:
+            if not payload.get('company_cd'):
+                payload['company_cd'] = "1000"
+            if not payload.get('plant_cd'):
+                payload['plant_cd'] = "1100"
+
+    if not payload.get('line_cd'):
+        from app.models.dies_task import Line
+        first_line = db.query(Line).first()
+        payload['line_cd'] = first_line.line_cd if first_line else "BL"
+
+    if not payload.get('machine_cd'):
+        from app.models.dies_task import Machine
+        first_machine = db.query(Machine).first()
+        payload['machine_cd'] = first_machine.machine_cd if first_machine else "1000BP"
+
+
     now_dt = get_utc7_now()
     task = DiesTask(
         id=next_id,
@@ -105,17 +133,23 @@ def create_task(
         changed_dt=now_dt,
         **payload
     )
+
+
     db.add(task)
 
     # 1. PIC utama (origin): user yang sedang login
     pics_to_add = []
+    seen = set()
     if created_by:
         pics_to_add.append((created_by, 1))
+        seen.add(created_by.lower())
 
     # 2. PIC tambahan (dropdown)
     for username in pic_usernames:
-        if username and username != created_by:
+        if username and username.lower() not in seen:
             pics_to_add.append((username, 0))
+            seen.add(username.lower())
+
 
     # Save to DET_DIES_PIC
     max_pic_id = db.query(func.max(DetDiesPic.dies_pic_id)).scalar() or 0
@@ -126,7 +160,7 @@ def create_task(
             dies_pic_id=next_pic_id,
             dies_reff_id=next_id,
             username=username,
-            is_origin_pic=is_origin,
+            is_origin_pic=str(is_origin),
             created_by=created_by,
             created_dt=get_utc7_now()
         )
@@ -160,6 +194,14 @@ def update_task(
 
     db.commit()
     db.refresh(task)
+
+    # Auto create entry in DET_FORM_DIES_REPAIR when task is completed
+    if task.status in ['3', '4']:
+        try:
+            create_form_dies_repair(db, dies_line_stop_id=task.id, pic=task.repaired_by, created_by=changed_by)
+        except Exception as e:
+            print(f"[WARN] Failed to auto create DET_FORM_DIES_REPAIR: {e}")
+
     return task
 
 
@@ -172,7 +214,7 @@ def delete_task(db: Session, task_id: str, task_type: TaskType) -> None:
 
 def create_part_order(db: Session, task_id: str, details_data: list[dict]) -> "PartOrderHeader":
     import random
-    from app.models.dies_task import PartOrderHeader, PartOrderDetail
+    from app.models.dies_task import PartOrderHeader, PartOrderDetail, MstrSparepart
 
     # Generate a unique order id
     while True:
@@ -189,15 +231,28 @@ def create_part_order(db: Session, task_id: str, details_data: list[dict]) -> "P
     db.add(header)
 
     for i, detail in enumerate(details_data):
+        ordered_qty = detail.get("qty", 1)
         item = PartOrderDetail(
             part_order_id=order_id,
             item_no=i + 1,
             part_cd=detail["part_cd"],
             part_name=detail["part_name"],
             location=detail.get("location"),
-            qty=detail.get("qty", 1)
+            qty=ordered_qty
         )
         db.add(item)
+
+        # ponytail: deduct stock from MSTR_SPAREPART
+        part_cd = detail.get("part_cd")
+        part_name = detail.get("part_name")
+        sparepart = None
+        if part_cd:
+            sparepart = db.query(MstrSparepart).filter(MstrSparepart.part_cd == part_cd).first()
+        if not sparepart and part_name:
+            sparepart = db.query(MstrSparepart).filter(MstrSparepart.part_name == part_name).first()
+        
+        if sparepart:
+            sparepart.qty_stock = max(0, (sparepart.qty_stock or 0) - ordered_qty)
 
     db.commit()
     db.refresh(header)
@@ -238,3 +293,49 @@ def update_part_order(db: Session, order_id: str, details_data: list[dict]) -> "
     db.commit()
     db.refresh(header)
     return header
+
+
+def create_form_dies_repair(
+    db: Session,
+    dies_line_stop_id: str,
+    pic: str | None = None,
+    created_by: str | None = None,
+) -> "DetFormDiesRepair":
+    """Buat record baru di DET_FORM_DIES_REPAIR yang terhubung ke DIES_LINE_STOP_ID."""
+    from app.models.dies_task import DetFormDiesRepair
+
+    existing = db.query(DetFormDiesRepair).filter(DetFormDiesRepair.dies_line_stop_id == dies_line_stop_id).first()
+    if existing:
+        return existing
+
+    today_str = get_utc7_now().strftime("%Y%m%d")
+    prefix = f"FR{today_str}/"
+    max_today = (
+        db.query(DetFormDiesRepair.form_dies_repair_id)
+        .filter(DetFormDiesRepair.form_dies_repair_id.like(f"{prefix}%"))
+        .order_by(DetFormDiesRepair.form_dies_repair_id.desc())
+        .first()
+    )
+    if max_today:
+        try:
+            last_inc = int(max_today[0].split("/")[-1])
+            next_inc = last_inc + 1
+        except Exception:
+            next_inc = 1
+    else:
+        next_inc = 1
+    form_id = f"{prefix}{next_inc:03d}"
+
+    new_form = DetFormDiesRepair(
+        form_dies_repair_id=form_id,
+        dies_line_stop_id=dies_line_stop_id,
+        pic=pic or created_by or "-",
+        status="1",  # ponytail: MSTR_SYSTEM STATUS.1 = Confirmed by Operator
+        created_dt=get_utc7_now(),
+        created_by=created_by or "system",
+    )
+    db.add(new_form)
+    db.commit()
+    db.refresh(new_form)
+    print(f"[OK] Entry DET_FORM_DIES_REPAIR created: {form_id} for Line Stop {dies_line_stop_id}")
+    return new_form

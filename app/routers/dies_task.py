@@ -7,8 +7,8 @@ Cara pakai di router masing-masing feature:
 
     router = make_dies_router(TaskType.LINE_STOP)
 """
-from typing import List
-from fastapi import APIRouter, Depends, status, Query
+from typing import List, Union
+from fastapi import APIRouter, Depends, status, Query, Body, Request
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -16,7 +16,15 @@ from app.dependencies import get_current_user
 from app.core.responses import success_response, created_response, paginated_response
 from app.models.user import User
 from app.models.dies_task import TaskType
-from app.schemas.dies_task import TaskCreateRequest, TaskUpdateRequest, TaskResponse, PartOrderDetailSchema, PartOrderHeaderSchema
+from app.schemas.dies_task import (
+    TaskCreateRequest,
+    TaskUpdateRequest,
+    TaskResponse,
+    PartOrderDetailSchema,
+    PartOrderHeaderSchema,
+    PartOrderCreateRequest,
+)
+
 from app.services import dies_task_service
 
 
@@ -52,23 +60,52 @@ def make_dies_router(task_type: TaskType) -> APIRouter:
             message="Task berhasil dibuat",
         )
 
+    @router.get("/companies", summary="Daftar Company / Plant")
+    def list_companies(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+        from app.models.dies_task import MstrCompany
+        items = db.query(MstrCompany).all()
+        return success_response(data=[{"company_cd": i.company_cd, "plant_cd": i.plant_cd, "company_name": i.company_name} for i in items])
+
+    @router.get("/models", summary="Daftar Master Model")
+    def list_models(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+        from app.models.dies_task import MstrModel
+        items = db.query(MstrModel).all()
+        return success_response(data=[{"model": i.model, "model_name": i.model_name} for i in items])
+
     @router.get("/lines", summary="Daftar Line")
-    def list_lines(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    def list_lines(company_cd: str = Query(None), plant_cd: str = Query(None), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
         from app.models.dies_task import Line
-        items = db.query(Line).all()
-        return success_response(data=[{"line_cd": i.line_cd, "line_name": i.line_name} for i in items])
+        query = db.query(Line)
+        if company_cd:
+            query = query.filter(Line.company_cd == company_cd)
+        if plant_cd:
+            query = query.filter(Line.plant_cd == plant_cd)
+        items = query.all()
+        return success_response(data=[{"line_cd": i.line_cd, "line_name": i.line_name, "company_cd": i.company_cd, "plant_cd": i.plant_cd} for i in items])
 
     @router.get("/machines", summary="Daftar Machine")
-    def list_machines(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    def list_machines(company_cd: str = Query(None), plant_cd: str = Query(None), line_cd: str = Query(None), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
         from app.models.dies_task import Machine
-        items = db.query(Machine).all()
-        return success_response(data=[{"machine_cd": i.machine_cd, "line_cd": i.line_cd, "machine_name": i.machine_name} for i in items])
+        query = db.query(Machine)
+        if company_cd:
+            query = query.filter(Machine.company_cd == company_cd)
+        if plant_cd:
+            query = query.filter(Machine.plant_cd == plant_cd)
+        if line_cd:
+            query = query.filter(Machine.line_cd == line_cd)
+        items = query.all()
+        return success_response(data=[{"machine_cd": i.machine_cd, "line_cd": i.line_cd, "machine_name": i.machine_name, "company_cd": i.company_cd, "plant_cd": i.plant_cd} for i in items])
 
     @router.get("/dies", summary="Daftar Dies")
-    def list_dies(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    def list_dies(company_cd: str = Query(None), plant_cd: str = Query(None), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
         from app.models.dies_task import Die
-        items = db.query(Die).all()
-        return success_response(data=[{"part_no": i.part_no, "model": i.model} for i in items])
+        query = db.query(Die)
+        if company_cd:
+            query = query.filter(Die.company_cd == company_cd)
+        if plant_cd:
+            query = query.filter(Die.plant_cd == plant_cd)
+        items = query.all()
+        return success_response(data=[{"part_no": i.part_no, "part_name": i.part_name or "", "model": i.model or i.part_no, "company_cd": i.company_cd, "plant_cd": i.plant_cd} for i in items])
 
     @router.get("/dies/{part_no}/operations", summary="Daftar Proses/Operation per Part No")
     def list_dies_operations(part_no: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
@@ -108,6 +145,63 @@ def make_dies_router(task_type: TaskType) -> APIRouter:
         items = db.query(MstrSystem).filter(MstrSystem.system_type == system_type).all()
         return success_response(data=[{"system_cd": i.system_cd, "system_value": i.system_value} for i in items])
 
+    @router.get("/spareparts", summary="Daftar Sparepart & Stok")
+    def list_spareparts(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+        from app.models.dies_task import MstrSparepart
+        items = db.query(MstrSparepart).all()
+        return success_response(data=[{
+            "part_cd": i.part_cd,
+            "part_name": i.part_name or "",
+            "location_cd": i.location_cd or "",
+            "qty_stock": i.qty_stock or 0
+        } for i in items])
+
+    @router.post("/{task_id:path}/send-to-repair", summary="Kirim ke DET_FORM_DIES_REPAIR")
+    def send_to_repair(
+        task_id: str,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ):
+        form = dies_task_service.create_form_dies_repair(
+            db, dies_line_stop_id=task_id, pic=current_user.full_name or current_user.username, created_by=current_user.username
+        )
+        return success_response(
+            data={"form_dies_repair_id": form.form_dies_repair_id, "dies_line_stop_id": form.dies_line_stop_id, "status": form.status},
+            message="Data berhasil masuk ke DET_FORM_DIES_REPAIR"
+        )
+
+    @router.post("/{task_id:path}/orders", response_model=PartOrderHeaderSchema, summary="Buat order part baru")
+    async def create_order(
+        task_id: str,
+        request: Request,
+        db: Session = Depends(get_db),
+        _: User = Depends(get_current_user),
+    ):
+        raw_body = await request.json()
+        if isinstance(raw_body, list):
+            details = raw_body
+        elif isinstance(raw_body, dict):
+            details = raw_body.get("details", raw_body.get("items", [raw_body]))
+        else:
+            details = []
+        return dies_task_service.create_part_order(db, task_id, details)
+
+    @router.put("/orders/{order_id}", response_model=PartOrderHeaderSchema, summary="Update order part")
+    async def update_order(
+        order_id: str,
+        request: Request,
+        db: Session = Depends(get_db),
+        _: User = Depends(get_current_user),
+    ):
+        raw_body = await request.json()
+        if isinstance(raw_body, list):
+            details = raw_body
+        elif isinstance(raw_body, dict):
+            details = raw_body.get("details", raw_body.get("items", [raw_body]))
+        else:
+            details = []
+        return dies_task_service.update_part_order(db, order_id, details)
+
     @router.get("/{task_id:path}", response_model=TaskResponse, summary=f"Detail {task_type.value}")
     def get_task(
         task_id: str,
@@ -137,24 +231,6 @@ def make_dies_router(task_type: TaskType) -> APIRouter:
     ):
         dies_task_service.delete_task(db, task_id, task_type)
 
-    @router.post("/{task_id:path}/orders", response_model=PartOrderHeaderSchema, summary="Buat order part baru")
-    def create_order(
-        task_id: str,
-        body: List[PartOrderDetailSchema],
-        db: Session = Depends(get_db),
-        _: User = Depends(get_current_user),
-    ):
-        details = [item.model_dump() for item in body]
-        return dies_task_service.create_part_order(db, task_id, details)
 
-    @router.put("/orders/{order_id}", response_model=PartOrderHeaderSchema, summary="Update order part")
-    def update_order(
-        order_id: str,
-        body: List[PartOrderDetailSchema],
-        db: Session = Depends(get_db),
-        _: User = Depends(get_current_user),
-    ):
-        details = [item.model_dump() for item in body]
-        return dies_task_service.update_part_order(db, order_id, details)
 
     return router

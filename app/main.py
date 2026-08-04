@@ -17,12 +17,13 @@ import os
 os.makedirs("uploads", exist_ok=True)
 
 # Import semua models agar terdaftar ke metadata Base sebelum create_all
-from app.models.user import User        # noqa: F401
+from app.models.user import User, Role  # noqa: F401
 from app.models.dies_task import (  # noqa: F401
     DiesTask, Line, Machine, Die, Attachment, PartOrderHeader, PartOrderDetail, DiesOperation,
-    MstrPlant, MstrPartLocation, MstrSparepart, MstrApprovalH, MstrApprovalD,
-    DetDiesPic, DetApproval, MstrPreventiveFormH, MstrPreventiveFormD,
-    DetDiesPreventiveScheduleH, DetDiesPreventiveScheduleD, DetPreventiveForm, DetDiesRepair
+    MstrCompany, MstrPlant, MstrModel, MstrDiesModel, MstrPartLocation, MstrSparepart,
+    MstrApprovalH, MstrApprovalD, DetDiesPic, DetApproval, MstrPreventiveFormH, MstrPreventiveFormD,
+    DetDiesPreventiveScheduleH, DetDiesPreventiveScheduleD, DetPreventiveForm, DetDiesRepair,
+    DetFormDiesRepair, MstrSystem, HistLog
 )
 
 # Routers
@@ -40,8 +41,8 @@ from app.internal.admin import seed_admin
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────
 
-    # Base.metadata.create_all(bind=engine)
-    print(f"[OK] Database ready: {settings.DATABASE_URL}")
+    Base.metadata.create_all(bind=engine)
+    print(f"[OK] Database ready & schema synced: {settings.DATABASE_URL}")
     # db = SessionLocal()
     # try:
     #     seed_admin(db)
